@@ -72,6 +72,11 @@
             <i class="btn-service-icon fa fa-sign-in"></i>
             Sign in with {{oauth.generic_oauth.name}}
           </a>
+          <a class="btn btn-medium btn-service btn-service--oidc login-btn" href="login/oidc" target="_self"
+            ng-if="oauth.oidc">
+            <i class="btn-service-icon fa fa-sign-in"></i>
+            Sign in with {{oauth.oidc.name}}
+          </a>
         </div>
         <div class="login-signup-box" ng-show="!disableUserSignUp">
           <div class="login-signup-title p-r-1">

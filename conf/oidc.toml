@@ -1,0 +1,15 @@
+# Map OIDC scopes to grafana org roles
+[[scope_mappings]]
+# use same scope multiple time if user should be member of multiple orgs
+scope = "grafana.superadmin"
+org_role = "Admin"
+# To make user an instance admin  (Grafana Admin) uncomment line below
+# grafana_admin = true
+# The Grafana organization database id, optional, if left out the default org (id 1) will be used
+# org_id = 1
+# Make the user member of teams (by database id) in the org_id
+# team_ids = [1, 2, 3]
+
+[[scope_mappings]]
+scope = "grafana.editor"
+org_role = "Editor"

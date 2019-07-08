@@ -91,8 +91,8 @@ func (ls *LoginService) UpsertUser(cmd *models.UpsertUserCommand) error {
 			}
 		}
 
-		if extUser.AuthModule == models.AuthModuleLDAP && userQuery.Result.IsDisabled {
-			// Re-enable user when it found in LDAP
+		if (extUser.AuthModule == models.AuthModuleLDAP || extUser.AuthModule == models.AuthModuleOIDC) && userQuery.Result.IsDisabled {
+			// Re-enable user when it found in LDAP or OIDC
 			if err := ls.Bus.Dispatch(&models.DisableUserCommand{UserId: cmd.Result.Id, IsDisabled: false}); err != nil {
 				return err
 			}
@@ -111,6 +111,9 @@ func (ls *LoginService) UpsertUser(cmd *models.UpsertUserCommand) error {
 			return err
 		}
 	}
+
+	// added this one, as no listener on the sync teams command ??
+	err = syncTeams(cmd.Result, extUser)
 
 	err = ls.Bus.Dispatch(&models.SyncTeamsCommand{
 		User:         cmd.Result,
@@ -246,6 +249,87 @@ func syncOrgRoles(user *models.User, extUser *models.ExternalUserInfo) error {
 			UserId: user.Id,
 			OrgId:  user.OrgId,
 		})
+	}
+
+	return nil
+}
+
+func syncTeams(user *models.User, extUser *models.ExternalUserInfo) error {
+	// don't sync teams if no teams are specified
+	if len(extUser.Teams) == 0 {
+		return nil
+	}
+
+	for orgID, userTeams := range extUser.Teams {
+		teamsInOrgQuery := &models.SearchTeamsQuery{
+			OrgId:        orgID,
+			Query:        "",
+			Name:         "",
+			UserIdFilter: 0,
+			Page:         1,
+			Limit:        0,
+		}
+		if err := bus.Dispatch(teamsInOrgQuery); err != nil {
+			return err
+		}
+
+		teamMemberQuery := &models.GetTeamsByUserQuery{OrgId: orgID, UserId: user.Id}
+		if err := bus.Dispatch(teamMemberQuery); err != nil {
+			return err
+		}
+
+		for _, userTeam := range userTeams {
+			userTeamFound := false
+			for _, team := range teamMemberQuery.Result {
+				if userTeam == team.Id {
+					userTeamFound = true
+					break
+				}
+			}
+			if !userTeamFound {
+				// add user to team
+				userTeamExists := false
+				for _, definedTeam := range teamsInOrgQuery.Result.Teams {
+					if userTeam == definedTeam.Id {
+						userTeamExists = true
+						break
+					}
+				}
+
+				if userTeamExists {
+					addTeamMemberQuery := &models.AddTeamMemberCommand{
+						UserId:   user.Id,
+						OrgId:    orgID,
+						TeamId:   userTeam,
+						External: true,
+					}
+					if err := bus.Dispatch(addTeamMemberQuery); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		for _, team := range teamMemberQuery.Result {
+			teamFound := false
+			for _, userTeam := range userTeams {
+				if userTeam == team.Id {
+					teamFound = true
+					break
+				}
+			}
+			if !teamFound {
+				removeTeamMemberQuery := &models.RemoveTeamMemberCommand{
+					UserId:           user.Id,
+					OrgId:            orgID,
+					TeamId:           team.Id,
+					ProtectLastAdmin: true,
+				}
+				if err := bus.Dispatch(removeTeamMemberQuery); err != nil {
+					return err
+				}
+			}
+		}
 	}
 
 	return nil

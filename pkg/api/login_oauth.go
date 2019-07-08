@@ -164,18 +164,24 @@ func (hs *HTTPServer) OAuthLogin(ctx *m.ReqContext) {
 	}
 
 	extUser := &m.ExternalUserInfo{
-		AuthModule: "oauth_" + name,
-		OAuthToken: token,
-		AuthId:     userInfo.Id,
-		Name:       userInfo.Name,
-		Login:      userInfo.Login,
-		Email:      userInfo.Email,
-		OrgRoles:   map[int64]m.RoleType{},
-		Groups:     userInfo.Groups,
+		AuthModule:     "oauth_" + name,
+		OAuthToken:     token,
+		AuthId:         userInfo.Id,
+		Name:           userInfo.Name,
+		Login:          userInfo.Login,
+		Email:          userInfo.Email,
+		OrgRoles:       userInfo.OrgRoles,
+		IsGrafanaAdmin: userInfo.IsGrafanaAdmin,
+		Teams:          userInfo.Teams,
 	}
 
 	if userInfo.Role != "" {
 		extUser.OrgRoles[1] = m.RoleType(userInfo.Role)
+	}
+
+	if len(extUser.OrgRoles) <= 0 && !setting.OAuthService.OAuthInfos[name].AllowNoOrgRolesLogin {
+		hs.redirectWithError(ctx, login.ErrNoOrgRolesAssigned)
+		return
 	}
 
 	// add/update user in grafana

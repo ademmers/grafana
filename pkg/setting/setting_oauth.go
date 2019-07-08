@@ -6,6 +6,8 @@ type OAuthInfo struct {
 	AuthUrl, TokenUrl            string
 	Enabled                      bool
 	EmailAttributeName           string
+	UsernameAttributeName        string
+	DisplaynameAttributeName     string
 	RoleAttributeName            string
 	AllowedDomains               []string
 	HostedDomain                 string
@@ -17,6 +19,8 @@ type OAuthInfo struct {
 	TlsClientCa                  string
 	TlsSkipVerify                bool
 	SendClientCredentialsViaPost bool
+	OIDCConfigFile               string
+	AllowNoOrgRolesLogin         bool
 }
 
 type OAuther struct {
