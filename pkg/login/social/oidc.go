@@ -3,105 +3,64 @@ package social
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
-	"net/mail"
 	"regexp"
+	"strings"
 
 	"github.com/grafana/grafana/pkg/util/errutil"
 
 	"github.com/grafana/grafana/pkg/models"
+	"github.com/grafana/grafana/pkg/services/oidc"
+
 	"github.com/jmespath/go-jmespath"
 	"golang.org/x/oauth2"
 )
 
-type SocialGenericOAuth struct {
+type SocialOIDC struct {
 	*SocialBase
-	allowedDomains       []string
-	allowedOrganizations []string
-	apiUrl               string
-	allowSignup          bool
-	emailAttributeName   string
-	emailAttributePath   string
-	roleAttributePath    string
-	teamIds              []int
+	allowedDomains           []string
+	apiUrl                   string
+	allowSignup              bool
+	emailAttributeName       string
+	emailAttributePath       string
+	usernameAttributeName    string
+	usernameAttributePath    string
+	displaynameAttributeName string
+	displaynameAttributePath string
+	roleAttributePath        string
+	oidcConfigFile           string
 }
 
-func (s *SocialGenericOAuth) Type() int {
-	return int(models.GENERIC)
+func (s *SocialOIDC) Type() int {
+	return int(models.OIDC)
 }
 
-func (s *SocialGenericOAuth) IsEmailAllowed(email string) bool {
+func (s *SocialOIDC) IsEmailAllowed(email string) bool {
 	return isEmailAllowed(email, s.allowedDomains)
 }
 
-func (s *SocialGenericOAuth) IsSignupAllowed() bool {
+func (s *SocialOIDC) IsSignupAllowed() bool {
 	return s.allowSignup
 }
 
-func (s *SocialGenericOAuth) IsTeamMember(client *http.Client) bool {
-	if len(s.teamIds) == 0 {
-		return true
-	}
-
-	teamMemberships, ok := s.FetchTeamMemberships(client)
-	if !ok {
-		return false
-	}
-
-	for _, teamId := range s.teamIds {
-		for _, membershipId := range teamMemberships {
-			if teamId == membershipId {
-				return true
-			}
-		}
-	}
-
-	return false
+type OIDCUserInfoJson struct {
+	Name              string                 `json:"name"`
+	GivenName         string                 `json:"given_name"`
+	PreferredUsername string                 `json:"preferred_username"`
+	Email             string                 `json:"email"`
+	X                 map[string]interface{} `json:"-"`
+	rawJSON           []byte
 }
 
-func (s *SocialGenericOAuth) IsOrganizationMember(client *http.Client) bool {
-	if len(s.allowedOrganizations) == 0 {
-		return true
-	}
-
-	organizations, ok := s.FetchOrganizations(client)
-	if !ok {
-		return false
-	}
-
-	for _, allowedOrganization := range s.allowedOrganizations {
-		for _, organization := range organizations {
-			if organization == allowedOrganization {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-type GenericUserInfoJson struct {
-	Name        string              `json:"name"`
-	DisplayName string              `json:"display_name"`
-	Login       string              `json:"login"`
-	Username    string              `json:"username"`
-	Email       string              `json:"email"`
-	Upn         string              `json:"upn"`
-	Attributes  map[string][]string `json:"attributes"`
-	rawJSON     []byte
-}
-
-func (info *GenericUserInfoJson) String() string {
+func (info *OIDCUserInfoJson) String() string {
 	return fmt.Sprintf(
-		"Name: %s, Displayname: %s, Login: %s, Username: %s, Email: %s, Upn: %s, Attributes: %v",
-		info.Name, info.DisplayName, info.Login, info.Username, info.Email, info.Upn, info.Attributes)
+		"Name: %s, GivenName: %s, PrefferedUsername: %s, Email: %s",
+		info.Name, info.GivenName, info.PreferredUsername, info.Email)
 }
 
-func (s *SocialGenericOAuth) UserInfo(client *http.Client, token *oauth2.Token) (*BasicUserInfo, error) {
-	var data GenericUserInfoJson
-	var err error
+func (s *SocialOIDC) UserInfo(client *http.Client, token *oauth2.Token) (*BasicUserInfo, error) {
+	var data OIDCUserInfoJson
 
 	userInfo := &BasicUserInfo{}
 
@@ -113,35 +72,21 @@ func (s *SocialGenericOAuth) UserInfo(client *http.Client, token *oauth2.Token) 
 		s.fillUserInfo(userInfo, &data)
 	}
 
-	if userInfo.Email == "" {
-		userInfo.Email, err = s.FetchPrivateEmail(client)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	if userInfo.Login == "" {
 		userInfo.Login = userInfo.Email
 	}
 
-	if !s.IsTeamMember(client) {
-		return nil, errors.New("User not a member of one of the required teams")
-	}
-
-	if !s.IsOrganizationMember(client) {
-		return nil, errors.New("User not a member of one of the required organizations")
+	if len(userInfo.OrgRoles) == 0 {
+		userInfo.Teams, userInfo.OrgRoles, userInfo.IsGrafanaAdmin = s.extractOrgRoles(token)
 	}
 
 	s.log.Debug("User info result", "result", userInfo)
 	return userInfo, nil
 }
 
-func (s *SocialGenericOAuth) fillUserInfo(userInfo *BasicUserInfo, data *GenericUserInfoJson) {
+func (s *SocialOIDC) fillUserInfo(userInfo *BasicUserInfo, data *OIDCUserInfoJson) {
 	if userInfo.Email == "" {
 		userInfo.Email = s.extractEmail(data)
-	}
-	if userInfo.Role == "" {
-		userInfo.Role = s.extractRole(data)
 	}
 	if userInfo.Name == "" {
 		userInfo.Name = s.extractName(data)
@@ -151,7 +96,7 @@ func (s *SocialGenericOAuth) fillUserInfo(userInfo *BasicUserInfo, data *Generic
 	}
 }
 
-func (s *SocialGenericOAuth) extractToken(data *GenericUserInfoJson, token *oauth2.Token) bool {
+func (s *SocialOIDC) extractToken(data *OIDCUserInfoJson, token *oauth2.Token) bool {
 	var err error
 
 	idToken := token.Extra("id_token")
@@ -184,7 +129,7 @@ func (s *SocialGenericOAuth) extractToken(data *GenericUserInfoJson, token *oaut
 	return true
 }
 
-func (s *SocialGenericOAuth) extractAPI(data *GenericUserInfoJson, client *http.Client) bool {
+func (s *SocialOIDC) extractAPI(data *OIDCUserInfoJson, client *http.Client) bool {
 	rawUserInfoResponse, err := HttpGet(client, s.apiUrl)
 	if err != nil {
 		s.log.Debug("Error getting user info response", "url", s.apiUrl, "error", err)
@@ -203,7 +148,7 @@ func (s *SocialGenericOAuth) extractAPI(data *GenericUserInfoJson, client *http.
 	return true
 }
 
-func (s *SocialGenericOAuth) extractEmail(data *GenericUserInfoJson) string {
+func (s *SocialOIDC) extractEmail(data *OIDCUserInfoJson) string {
 	if data.Email != "" {
 		return data.Email
 	}
@@ -215,61 +160,69 @@ func (s *SocialGenericOAuth) extractEmail(data *GenericUserInfoJson) string {
 		}
 	}
 
-	emails, ok := data.Attributes[s.emailAttributeName]
-	if ok && len(emails) != 0 {
-		return emails[0]
-	}
-
-	if data.Upn != "" {
-		emailAddr, emailErr := mail.ParseAddress(data.Upn)
-		if emailErr == nil {
-			return emailAddr.Address
-		}
-		s.log.Debug("Failed to parse e-mail address", "error", emailErr.Error())
+	email, ok := data.X[s.emailAttributeName]
+	if ok && len(email.(string)) != 0 {
+		return email.(string)
 	}
 
 	return ""
 }
 
-func (s *SocialGenericOAuth) extractRole(data *GenericUserInfoJson) string {
-	if s.roleAttributePath != "" {
-		role := s.searchJSONForAttr(s.roleAttributePath, data.rawJSON)
-		if role != "" {
-			return role
+func (s *SocialOIDC) extractLogin(data *OIDCUserInfoJson) string {
+	if data.PreferredUsername != "" {
+		return data.PreferredUsername
+	}
+
+	if s.usernameAttributePath != "" {
+		username := s.searchJSONForAttr(s.usernameAttributePath, data.rawJSON)
+		if username != "" {
+			return username
 		}
 	}
-	return ""
-}
 
-func (s *SocialGenericOAuth) extractLogin(data *GenericUserInfoJson) string {
-	if data.Login != "" {
-		return data.Login
-	}
-
-	if data.Username != "" {
-		return data.Username
+	username, ok := data.X[s.usernameAttributeName]
+	if ok && len(username.(string)) != 0 {
+		return username.(string)
 	}
 
 	return ""
 }
 
-func (s *SocialGenericOAuth) extractName(data *GenericUserInfoJson) string {
+func (s *SocialOIDC) extractName(data *OIDCUserInfoJson) string {
 	if data.Name != "" {
 		return data.Name
 	}
 
-	if data.DisplayName != "" {
-		return data.DisplayName
+	if data.GivenName != "" {
+		return data.GivenName
+	}
+
+	if s.displaynameAttributePath != "" {
+		name := s.searchJSONForAttr(s.displaynameAttributePath, data.rawJSON)
+		if name != "" {
+			return name
+		}
+	}
+
+	name, ok := data.X[s.displaynameAttributeName]
+	if ok && len(name.(string)) != 0 {
+		return name.(string)
 	}
 
 	return ""
+}
+
+func (s *SocialOIDC) extractOrgRoles(token *oauth2.Token) (teams map[int64][]int64, orgRoles map[int64]models.RoleType, isGrafanaAdmin *bool) {
+	accessTokenScopes := strings.Split(token.Extra("scope").(string), " ")
+	teams, orgRoles, isGrafanaAdmin = oidc.GetOrgRolesFromScopes(accessTokenScopes)
+	return
 }
 
 // searchJSONForAttr searches the provided JSON response for the given attribute
 // using the configured  attribute path associated with the generic OAuth
 // provider.
 // Returns an empty string if an attribute is not found.
-func (s *SocialGenericOAuth) searchJSONForAttr(attributePath string, data []byte) string {
+func (s *SocialOIDC) searchJSONForAttr(attributePath string, data []byte) string {
 	if attributePath == "" {
 		s.log.Error("No attribute path specified")
 		return ""
@@ -296,7 +249,7 @@ func (s *SocialGenericOAuth) searchJSONForAttr(attributePath string, data []byte
 	return ""
 }
 
-func (s *SocialGenericOAuth) FetchPrivateEmail(client *http.Client) (string, error) {
+func (s *SocialOIDC) FetchPrivateEmail(client *http.Client) (string, error) {
 	type Record struct {
 		Email       string `json:"email"`
 		Primary     bool   `json:"primary"`
@@ -343,7 +296,7 @@ func (s *SocialGenericOAuth) FetchPrivateEmail(client *http.Client) (string, err
 	return email, nil
 }
 
-func (s *SocialGenericOAuth) FetchTeamMemberships(client *http.Client) ([]int, bool) {
+func (s *SocialOIDC) FetchTeamMemberships(client *http.Client) ([]int, bool) {
 	type Record struct {
 		Id int `json:"id"`
 	}
@@ -372,7 +325,7 @@ func (s *SocialGenericOAuth) FetchTeamMemberships(client *http.Client) ([]int, b
 	return ids, true
 }
 
-func (s *SocialGenericOAuth) FetchOrganizations(client *http.Client) ([]string, bool) {
+func (s *SocialOIDC) FetchOrganizations(client *http.Client) ([]string, bool) {
 	type Record struct {
 		Login string `json:"login"`
 	}

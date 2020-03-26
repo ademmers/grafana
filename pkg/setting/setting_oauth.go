@@ -1,22 +1,28 @@
 package setting
 
 type OAuthInfo struct {
-	ClientId, ClientSecret string
-	Scopes                 []string
-	AuthUrl, TokenUrl      string
-	Enabled                bool
-	EmailAttributeName     string
-	EmailAttributePath     string
-	RoleAttributePath      string
-	AllowedDomains         []string
-	HostedDomain           string
-	ApiUrl                 string
-	AllowSignup            bool
-	Name                   string
-	TlsClientCert          string
-	TlsClientKey           string
-	TlsClientCa            string
-	TlsSkipVerify          bool
+	ClientId, ClientSecret   string
+	Scopes                   []string
+	AuthUrl, TokenUrl        string
+	Enabled                  bool
+	EmailAttributeName       string
+	EmailAttributePath       string
+	UsernameAttributeName    string
+	UsernameAttributePath    string
+	DisplaynameAttributeName string
+	DisplaynameAttributePath string
+	RoleAttributePath        string
+	AllowedDomains           []string
+	HostedDomain             string
+	ApiUrl                   string
+	AllowSignup              bool
+	Name                     string
+	TlsClientCert            string
+	TlsClientKey             string
+	TlsClientCa              string
+	TlsSkipVerify            bool
+	OIDCConfigFile           string
+	AllowNoOrgRolesLogin     bool
 }
 
 type OAuther struct {

@@ -39,6 +39,12 @@ const loginServices: () => LoginServices = () => {
       icon: 'sign-in',
       hrefName: 'generic_oauth',
     },
+    oidc: {
+      enabled: oauthEnabled && config.oauth.oidc,
+      name: oauthEnabled && config.oauth.oidc ? config.oauth.oidc.name : 'OpenID Connect',
+      icon: 'sign-in',
+      hrefName: 'oidc',
+    },
   };
 };
 

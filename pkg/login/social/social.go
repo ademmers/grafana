@@ -9,18 +9,22 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/grafana/grafana/pkg/infra/log"
+	"github.com/grafana/grafana/pkg/models"
 	"github.com/grafana/grafana/pkg/setting"
 	"github.com/grafana/grafana/pkg/util"
 )
 
 type BasicUserInfo struct {
-	Id      string
-	Name    string
-	Email   string
-	Login   string
-	Company string
-	Role    string
-	Groups  []string
+	Id             string
+	Name           string
+	Email          string
+	Login          string
+	Company        string
+	Role           string
+	Groups         []string
+	OrgRoles       map[int64]models.RoleType
+	IsGrafanaAdmin *bool
+	Teams          map[int64][]int64
 }
 
 type SocialConnector interface {
@@ -55,7 +59,7 @@ const (
 var (
 	SocialBaseUrl = "/login/"
 	SocialMap     = make(map[string]SocialConnector)
-	allOauthes    = []string{"github", "gitlab", "google", "generic_oauth", "grafananet", grafanaCom, "azuread"}
+	allOauthes    = []string{"github", "gitlab", "google", "generic_oauth", "oidc", "grafananet", grafanaCom, "azuread"}
 )
 
 func NewOAuthService() {
@@ -65,24 +69,30 @@ func NewOAuthService() {
 	for _, name := range allOauthes {
 		sec := setting.Raw.Section("auth." + name)
 		info := &setting.OAuthInfo{
-			ClientId:           sec.Key("client_id").String(),
-			ClientSecret:       sec.Key("client_secret").String(),
-			Scopes:             util.SplitString(sec.Key("scopes").String()),
-			AuthUrl:            sec.Key("auth_url").String(),
-			TokenUrl:           sec.Key("token_url").String(),
-			ApiUrl:             sec.Key("api_url").String(),
-			Enabled:            sec.Key("enabled").MustBool(),
-			EmailAttributeName: sec.Key("email_attribute_name").String(),
-			EmailAttributePath: sec.Key("email_attribute_path").String(),
-			RoleAttributePath:  sec.Key("role_attribute_path").String(),
-			AllowedDomains:     util.SplitString(sec.Key("allowed_domains").String()),
-			HostedDomain:       sec.Key("hosted_domain").String(),
-			AllowSignup:        sec.Key("allow_sign_up").MustBool(),
-			Name:               sec.Key("name").MustString(name),
-			TlsClientCert:      sec.Key("tls_client_cert").String(),
-			TlsClientKey:       sec.Key("tls_client_key").String(),
-			TlsClientCa:        sec.Key("tls_client_ca").String(),
-			TlsSkipVerify:      sec.Key("tls_skip_verify_insecure").MustBool(),
+			ClientId:                 sec.Key("client_id").String(),
+			ClientSecret:             sec.Key("client_secret").String(),
+			Scopes:                   util.SplitString(sec.Key("scopes").String()),
+			AuthUrl:                  sec.Key("auth_url").String(),
+			TokenUrl:                 sec.Key("token_url").String(),
+			ApiUrl:                   sec.Key("api_url").String(),
+			Enabled:                  sec.Key("enabled").MustBool(),
+			EmailAttributeName:       sec.Key("email_attribute_name").String(),
+			EmailAttributePath:       sec.Key("email_attribute_path").String(),
+			UsernameAttributeName:    sec.Key("username_attribute_name").String(),
+			UsernameAttributePath:    sec.Key("username_attribute_path").String(),
+			DisplaynameAttributeName: sec.Key("displayname_attribute_name").String(),
+			DisplaynameAttributePath: sec.Key("displayname_attribute_path").String(),
+			RoleAttributePath:        sec.Key("role_attribute_path").String(),
+			AllowedDomains:           util.SplitString(sec.Key("allowed_domains").String()),
+			HostedDomain:             sec.Key("hosted_domain").String(),
+			AllowSignup:              sec.Key("allow_sign_up").MustBool(),
+			Name:                     sec.Key("name").MustString(name),
+			TlsClientCert:            sec.Key("tls_client_cert").String(),
+			TlsClientKey:             sec.Key("tls_client_key").String(),
+			TlsClientCa:              sec.Key("tls_client_ca").String(),
+			TlsSkipVerify:            sec.Key("tls_skip_verify_insecure").MustBool(),
+			OIDCConfigFile:           sec.Key("oidc_config_file").String(),
+			AllowNoOrgRolesLogin:     sec.Key("allow_no_org_roles_login").MustBool(),
 		}
 
 		if !info.Enabled {
@@ -180,6 +190,25 @@ func NewOAuthService() {
 				roleAttributePath:    info.RoleAttributePath,
 				teamIds:              sec.Key("team_ids").Ints(","),
 				allowedOrganizations: util.SplitString(sec.Key("allowed_organizations").String()),
+			}
+		}
+
+		if name == "oidc" {
+			SocialMap["oidc"] = &SocialOIDC{
+				SocialBase: &SocialBase{
+					Config: &config,
+					log:    logger,
+				},
+				allowedDomains:           info.AllowedDomains,
+				apiUrl:                   info.ApiUrl,
+				allowSignup:              info.AllowSignup,
+				emailAttributeName:       info.EmailAttributeName,
+				emailAttributePath:       info.EmailAttributePath,
+				usernameAttributeName:    info.UsernameAttributeName,
+				usernameAttributePath:    info.UsernameAttributePath,
+				displaynameAttributeName: info.DisplaynameAttributeName,
+				displaynameAttributePath: info.DisplaynameAttributePath,
+				oidcConfigFile:           info.OIDCConfigFile,
 			}
 		}
 

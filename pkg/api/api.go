@@ -409,6 +409,8 @@ func (hs *HTTPServer) registerRoutes() {
 		adminRoute.Post("/ldap/sync/:id", Wrap(hs.PostSyncUserWithLDAP))
 		adminRoute.Get("/ldap/:username", Wrap(hs.GetUserFromLDAP))
 		adminRoute.Get("/ldap/status", Wrap(hs.GetLDAPStatus))
+
+		adminRoute.Post("/oidc/reload", Wrap(hs.ReloadOIDCCfg))
 	}, reqGrafanaAdmin)
 
 	// rendering
